@@ -34,12 +34,12 @@ def init_db():
     cur = conn.cursor()
     try:
         if DATABASE_URL:
-            cur.execute("CREATE TABLE IF NOT EXISTS state4 (id INT PRIMARY KEY, auto_mode BOOLEAN DEFAULT FALSE, last_processed INT DEFAULT 0)")
-            cur.execute("INSERT INTO state4 (id, auto_mode, last_processed) VALUES (1, FALSE, 0) ON CONFLICT (id) DO NOTHING")
+            cur.execute("CREATE TABLE IF NOT EXISTS state4 (id INT PRIMARY KEY, last_processed INT DEFAULT 0)")
+            cur.execute("INSERT INTO state4 (id, last_processed) VALUES (1, 0) ON CONFLICT (id) DO NOTHING")
             cur.execute("CREATE TABLE IF NOT EXISTS preds4 (id SERIAL PRIMARY KEY, target_game INT NOT NULL, suit TEXT NOT NULL, msg_id BIGINT NOT NULL, status TEXT DEFAULT 'pending', check_games TEXT, check_idx INT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
         else:
-            cur.execute("CREATE TABLE IF NOT EXISTS state4 (id INTEGER PRIMARY KEY, auto_mode INTEGER DEFAULT 0, last_processed INTEGER DEFAULT 0)")
-            cur.execute("INSERT OR IGNORE INTO state4 (id, auto_mode, last_processed) VALUES (1, 0, 0)")
+            cur.execute("CREATE TABLE IF NOT EXISTS state4 (id INTEGER PRIMARY KEY, last_processed INTEGER DEFAULT 0)")
+            cur.execute("INSERT OR IGNORE INTO state4 (id, last_processed) VALUES (1, 0)")
             cur.execute("CREATE TABLE IF NOT EXISTS preds4 (id INTEGER PRIMARY KEY AUTOINCREMENT, target_game INT NOT NULL, suit TEXT NOT NULL, msg_id BIGINT NOT NULL, status TEXT DEFAULT 'pending', check_games TEXT, check_idx INT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
         conn.commit()
     except Exception as e:
@@ -48,28 +48,30 @@ def init_db():
         cur.close()
         conn.close()
 
-def load_state():
+def load_lp():
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT auto_mode, last_processed FROM state4 WHERE id = 1")
+        cur.execute("SELECT last_processed FROM state4 WHERE id = 1")
         row = cur.fetchone()
-        return bool(row[0]), int(row[1])
+        return int(row[0]) if row else 0
     except:
-        return False, 0
+        return 0
     finally:
         cur.close()
         conn.close()
 
-def save_state(am, lp):
+def save_lp(lp):
     conn = get_conn()
     cur = conn.cursor()
     try:
         if DATABASE_URL:
-            cur.execute("UPDATE state4 SET auto_mode = %s, last_processed = %s WHERE id = 1", (am, lp))
+            cur.execute("UPDATE state4 SET last_processed = %s WHERE id = 1", (lp,))
         else:
-            cur.execute("UPDATE state4 SET auto_mode = ?, last_processed = ? WHERE id = 1", (int(am), lp))
+            cur.execute("UPDATE state4 SET last_processed = ? WHERE id = 1", (lp,))
         conn.commit()
+    except Exception as e:
+        print("Save lp:", e)
     finally:
         cur.close()
         conn.close()
@@ -241,9 +243,7 @@ def process_preds():
                 update_idx(pid, nidx)
 
 def create_predictions():
-    auto_mode, last_processed = load_state()
-    if not auto_mode:
-        return "skipped"
+    last_processed = load_lp()
     games = parse_cerber()
     if not games:
         return "no games"
@@ -275,7 +275,7 @@ def create_predictions():
         last_processed = gn
         updated = True
     if updated:
-        save_state(auto_mode, last_processed)
+        save_lp(last_processed)
     return f"processed #{last_processed}"
 
 @app.route("/")
@@ -303,7 +303,7 @@ def webhook():
             try:
                 n = int(parts[1])
                 if 1 <= n <= MAX_GAME_NUM:
-                    save_state(True, n)
+                    save_lp(n)
                     tg_send(cid, f"✅ ЗАПУЩЕН! Старт с игры: #{n}")
                 else:
                     tg_send(cid, f"❌ От 1 до {MAX_GAME_NUM}")
@@ -313,14 +313,12 @@ def webhook():
             tg_send(cid, "🎴 /start <номер>\n/stop\n/status")
 
     elif text == "/stop":
-        am, lp = load_state()
-        save_state(False, lp)
-        tg_send(cid, "🛑 ОСТАНОВЛЕН!")
+        tg_send(cid, "🛑 ОСТАНОВЛЕН! (cron остановится)")
 
     elif text == "/status":
-        am, lp = load_state()
+        lp = load_lp()
         preds = get_pending()
-        tg_send(cid, f"{'🟢 АКТИВЕН' if am else '🔴 ВЫКЛЮЧЕН'}\nОбработана: #{lp}\nПрогнозов: {len(preds)}")
+        tg_send(cid, f"🟢 РАБОТАЕТ\nОбработана: #{lp}\nПрогнозов: {len(preds)}")
 
     return "ok", 200
 
